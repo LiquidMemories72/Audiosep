@@ -1,0 +1,35 @@
+# Virtual Environment
+venv/
+.venv/
+env/
+ENV/
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data and Models
+data/
+results/
+*.wav
+*.mp3
+*.flac
+*.zip
+*.tar
+*.gz
+
+# System Files
+.DS_Store
+Thumbs.db

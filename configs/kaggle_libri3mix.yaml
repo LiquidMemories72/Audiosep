@@ -1,0 +1,75 @@
+# =============================================================================
+# DExFormer — Kaggle Training Configuration
+# Default for single-GPU Kaggle notebooks (T4 / P100, 16 GB VRAM).
+# =============================================================================
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Model architecture
+# ──────────────────────────────────────────────────────────────────────────────
+model:
+  N_filters: 256          # Encoder / Decoder filter count
+  kernel_size: 16         # Encoder/Decoder conv kernel
+  N_macro_iterations: 3   # Outer loop (N) — number of (IntraConvT, InterConvT) pairs
+  K_inner_repeats: 8      # Inner loop (K) — repeats inside each ConvTBlock
+  nhead: 8                # Transformer attention heads
+  expansion_factor: 2     # MobileNetV2 bottleneck expansion ratio
+  dropout: 0.1
+  chunk_size: 100         # Dual-path segmentation chunk size
+
+  # ─── NORMALIZATION DEVIATION ───────────────────────────────────────────────
+  # The DExFormer paper (Lee, Kim & Jang, Sensors 2025) uses BatchNorm1d inside
+  # the MobileNetV2 bottleneck (on the first two convolutions only).
+  #
+  # This implementation defaults to GroupNorm(1, C) instead, because:
+  #   1. Kaggle training uses batch_size=1 due to VRAM constraints (144 transformer
+  #      passes per forward step × float32 activations exhausts 16 GB).
+  #   2. BatchNorm1d with batch_size=1 is degenerate: the per-batch variance
+  #      is identically 0, making BN a no-op (output = weight * 0/sqrt(eps) + bias).
+  #   3. GroupNorm(1, C) is mathematically equivalent to instance normalization
+  #      with learnable affine parameters. It normalizes over all C channels per
+  #      sample, independent of batch size, and is well-behaved at batch_size=1.
+  #
+  # To reproduce the exact paper configuration, change this value to "batchnorm"
+  # and increase batch_size to >= 2 (requires reducing gradient_accumulation_steps
+  # or moving to a larger GPU).
+  #
+  # Behavioral differences between the two settings:
+  #   "groupnorm" (default):
+  #     - Statistics computed per-sample, per-channel-group: no batch coupling.
+  #     - No running mean/variance buffers; no train/eval mode difference in BN.
+  #     - Slightly lower peak performance vs. BN at large batch sizes (literature).
+  #     - Recommended for batch_size=1 and gradient-accumulation training.
+  #   "batchnorm" (paper-exact):
+  #     - Statistics computed across the batch dimension.
+  #     - Maintains running mean/variance for inference.
+  #     - Numerically better at batch_size >= 8 (typical in the paper).
+  #     - Breaks at batch_size=1.
+  norm_type: "groupnorm"   # "groupnorm" (Kaggle default) | "batchnorm" (paper-exact)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Training
+# ──────────────────────────────────────────────────────────────────────────────
+training:
+  num_spks: 3             # Libri3Mix: 3 speakers
+  batch_size: 1           # Forced by VRAM (see norm_type comment above)
+  gradient_accumulation_steps: 8   # Effective batch = 8 for optimizer stability
+  max_epochs: 200
+  learning_rate: 1.5e-4
+  lr_warmup_steps: 4000
+  grad_clip_max_norm: 5.0
+  mixed_precision: true   # AMP — mandatory at batch_size=1 with this model size
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Loss
+# ──────────────────────────────────────────────────────────────────────────────
+loss:
+  metric: "snr"           # Plain SNR — not SI-SDR. Required for STC to function.
+  aggregation: "mean"     # [HYPOTHESIS] Mean over N extraction steps — not specified in paper.
+
+# ──────────────────────────────────────────────────────────────────────────────
+# STC (Inference only)
+# ──────────────────────────────────────────────────────────────────────────────
+stc:
+  H_s: -30.0   # [APPROXIMATION] Source power threshold relative to mixture (dB)
+  H_r: -30.0   # [APPROXIMATION] Residual power threshold relative to mixture (dB)
+  max_inference_steps: 10  # Hard upper bound on extraction steps at inference

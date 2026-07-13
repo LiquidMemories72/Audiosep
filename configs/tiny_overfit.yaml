@@ -1,0 +1,67 @@
+# Seed needs to be set at top of yaml, before objects with parameters are made
+seed: 1234
+__set_seed: !apply:torch.manual_seed [!ref <seed>]
+output_folder: !ref results/tiny_overfit/<seed>
+
+# Data paths
+data_folder: data/tiny_libri3mix/wav16k/max/train
+train_data: data/tiny_train.csv
+valid_data: data/tiny_train.csv
+test_data: data/tiny_train.csv
+
+# Experiment Params
+num_spks: 3
+batch_size: 1
+gradient_accumulation_steps: 1
+max_epochs: 50
+learning_rate: 1.0e-4
+lr_warmup_steps: 10
+clip_grad_norm: 5.0
+mixed_precision: true
+
+# Data Loader
+dataloader_opts:
+    batch_size: !ref <batch_size>
+    num_workers: 0
+
+# Network Parameters
+N_filters: 256
+kernel_size: 16
+N_macro_iterations: 3
+K_inner_repeats: 8
+nhead: 8
+expansion_factor: 2
+dropout: 0.1
+chunk_size: 100
+norm_type: "batchnorm"
+
+# Modules
+
+dexformer: !new:dexformer.models.dexformer.DExFormer
+    N_filters: !ref <N_filters>
+    kernel_size: !ref <kernel_size>
+    N_macro_iterations: !ref <N_macro_iterations>
+    K_inner_repeats: !ref <K_inner_repeats>
+    nhead: !ref <nhead>
+    expansion_factor: !ref <expansion_factor>
+    dropout: !ref <dropout>
+    chunk_size: !ref <chunk_size>
+    norm_type: !ref <norm_type>
+
+modules:
+    dexformer: !ref <dexformer>
+
+# Optimizer
+optimizer: !name:torch.optim.Adam
+    lr: !ref <learning_rate>
+
+epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
+    limit: !ref <max_epochs>
+
+# Checkpointer
+checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
+    checkpoints_dir: !ref <output_folder>/save
+    recoverables:
+        model: !ref <dexformer>
+        optimizer: !ref <optimizer>
+        counter: !ref <epoch_counter>
