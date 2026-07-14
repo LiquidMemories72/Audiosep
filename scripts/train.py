@@ -67,9 +67,7 @@ class DExFormerSeparation(sb.Brain):
         # Determine number of speakers
         num_spks = self.hparams.num_spks
         
-        targets = [batch.s1_sig, batch.s2_sig]
-        if num_spks == 3:
-            targets.append(batch.s3_sig)
+        targets = [getattr(batch, f"s{i}_sig") for i in range(1, num_spks + 1)]
             
         noise = None # Not using WHAM noise in this script for simplicity
 
@@ -113,19 +111,15 @@ class DExFormerSeparation(sb.Brain):
             
             # Save mixture and GT (only for the first element in batch)
             torchaudio.save(os.path.join(save_dir, f"{step_str}_mix.wav"), mixture[0].squeeze().unsqueeze(0).cpu(), 16000)
-            torchaudio.save(os.path.join(save_dir, f"{step_str}_gt_spk1.wav"), targets[0][0][0].squeeze().unsqueeze(0).cpu(), 16000)
-            torchaudio.save(os.path.join(save_dir, f"{step_str}_gt_spk2.wav"), targets[1][0][0].squeeze().unsqueeze(0).cpu(), 16000)
-            if num_spks == 3:
-                torchaudio.save(os.path.join(save_dir, f"{step_str}_gt_spk3.wav"), targets[2][0][0].squeeze().unsqueeze(0).cpu(), 16000)
+            for i, t in enumerate(targets):
+                torchaudio.save(os.path.join(save_dir, f"{step_str}_gt_spk{i+1}.wav"), t[0][0].squeeze().unsqueeze(0).cpu(), 16000)
             
             # Save estimations
             # predictions is exactly est_sources (the list of speaker tensors)
             est_sources = predictions
             
-            torchaudio.save(os.path.join(save_dir, f"{step_str}_est_spk1.wav"), est_sources[0][0].detach().squeeze().unsqueeze(0).cpu(), 16000)
-            torchaudio.save(os.path.join(save_dir, f"{step_str}_est_spk2.wav"), est_sources[1][0].detach().squeeze().unsqueeze(0).cpu(), 16000)
-            if num_spks == 3:
-                torchaudio.save(os.path.join(save_dir, f"{step_str}_est_spk3.wav"), est_sources[2][0].detach().squeeze().unsqueeze(0).cpu(), 16000)
+            for i, s in enumerate(est_sources):
+                torchaudio.save(os.path.join(save_dir, f"{step_str}_est_spk{i+1}.wav"), s[0].detach().squeeze().unsqueeze(0).cpu(), 16000)
                 
             # Note: saving residuals is tricky because they are computed inside extract_all and not returned.
             # For this quick experiment, we will just save the final sources.
@@ -140,9 +134,7 @@ class DExFormerSeparation(sb.Brain):
     def evaluate_batch(self, batch, stage):
         """Computations needed for validation/test batches"""
         mixture = batch.mix_sig
-        targets = [batch.s1_sig, batch.s2_sig]
-        if self.hparams.num_spks == 3:
-            targets.append(batch.s3_sig)
+        targets = [getattr(batch, f"s{i}_sig") for i in range(1, self.hparams.num_spks + 1)]
 
         with torch.no_grad():
             predictions, targets_unpacked, mix_unpacked = self.compute_forward(mixture, targets, stage)
@@ -195,38 +187,24 @@ def dataio_prep(hparams):
         mix_sig = sb.dataio.dataio.read_audio(mix_wav)
         return mix_sig[:max_len]
 
-    @sb.utils.data_pipeline.takes("s1_wav")
-    @sb.utils.data_pipeline.provides("s1_sig")
-    def audio_pipeline_s1(s1_wav):
-        s1_sig = sb.dataio.dataio.read_audio(s1_wav)
-        return s1_sig[:max_len]
-
-    @sb.utils.data_pipeline.takes("s2_wav")
-    @sb.utils.data_pipeline.provides("s2_sig")
-    def audio_pipeline_s2(s2_wav):
-        s2_sig = sb.dataio.dataio.read_audio(s2_wav)
-        return s2_sig[:max_len]
-
-    if hparams["num_spks"] == 3:
-        @sb.utils.data_pipeline.takes("s3_wav")
-        @sb.utils.data_pipeline.provides("s3_sig")
-        def audio_pipeline_s3(s3_wav):
-            s3_sig = sb.dataio.dataio.read_audio(s3_wav)
-            return s3_sig[:max_len]
-
     sb.dataio.dataset.add_dynamic_item(datasets, audio_pipeline_mix)
-    sb.dataio.dataset.add_dynamic_item(datasets, audio_pipeline_s1)
-    sb.dataio.dataset.add_dynamic_item(datasets, audio_pipeline_s2)
-    
-    if hparams["num_spks"] == 3:
-        sb.dataio.dataset.add_dynamic_item(datasets, audio_pipeline_s3)
-        sb.dataio.dataset.set_output_keys(
-            datasets, ["id", "mix_sig", "s1_sig", "s2_sig", "s3_sig"]
-        )
-    else:
-        sb.dataio.dataset.set_output_keys(
-            datasets, ["id", "mix_sig", "s1_sig", "s2_sig"]
-        )
+
+    # Dynamically register one audio pipeline per speaker (s1_wav -> s1_sig, ..., sN_wav -> sN_sig).
+    # A factory function is used to capture `wav_key` / `sig_key` by value, avoiding the classic
+    # loop-closure pitfall where all lambdas would capture the same (final) loop variable.
+    def make_audio_pipeline(wav_key, sig_key, max_samples):
+        @sb.utils.data_pipeline.takes(wav_key)
+        @sb.utils.data_pipeline.provides(sig_key)
+        def _pipeline(wav_path):
+            return sb.dataio.dataio.read_audio(wav_path)[:max_samples]
+        return _pipeline
+
+    for i in range(1, hparams["num_spks"] + 1):
+        pipeline = make_audio_pipeline(f"s{i}_wav", f"s{i}_sig", max_len)
+        sb.dataio.dataset.add_dynamic_item(datasets, pipeline)
+
+    output_keys = ["id", "mix_sig"] + [f"s{i}_sig" for i in range(1, hparams["num_spks"] + 1)]
+    sb.dataio.dataset.set_output_keys(datasets, output_keys)
 
     return train_data, valid_data, test_data
 
