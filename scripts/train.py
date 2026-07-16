@@ -40,8 +40,8 @@ class DExFormerSeparation(sb.Brain):
             
         # Optional: Apply augmentations (speed perturb, dropping, etc) if stage == sb.Stage.TRAIN
         
-        # Run DExFormer extraction loop
-        est_sources = self.modules.dexformer.extract_all(
+        # Run DExFormer extraction loop via __call__ so DDP can hook into forward()
+        est_sources = self.modules.dexformer(
             mix, 
             num_speakers=num_spks, 
             training=(stage == sb.Stage.TRAIN)
@@ -213,6 +213,16 @@ if __name__ == "__main__":
     hparams_file, run_opts, overrides = sb.parse_arguments(sys.argv[1:])
     with open(hparams_file, encoding="utf-8") as fin:
         hparams = load_hyperpyyaml(fin, overrides)
+
+    # Auto-detect torchrun (DDP) to trigger SpeechBrain's native distributed_launch
+    if "LOCAL_RANK" in os.environ:
+        run_opts["distributed_launch"] = True
+        if "distributed_backend" not in run_opts:
+            run_opts["distributed_backend"] = "nccl"
+
+    # Alias DExFormer.forward to extract_all so PyTorch DDP can synchronize gradients correctly
+    if not hasattr(DExFormer, "forward") or DExFormer.forward == torch.nn.Module.forward:
+        DExFormer.forward = DExFormer.extract_all
 
     # Initialize ddp (useful only for multi-GPU DDP training)
     sb.utils.distributed.ddp_init_group(run_opts)

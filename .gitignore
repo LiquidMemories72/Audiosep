@@ -33,3 +33,14 @@ results/
 # System Files
 .DS_Store
 Thumbs.db
+
+# Temporary Helper Scripts and Embedded Repos
+LibriMix/
+temp_librimix/
+fix_*.py
+make_idempotent.py
+metadata_script.py
+patch_notebook.py
+remove_q.py
+revert_url.py
+create_train_nb.py

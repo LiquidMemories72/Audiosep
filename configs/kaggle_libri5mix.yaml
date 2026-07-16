@@ -1,47 +1,47 @@
 # =============================================================================
-# DExFormer — Kaggle Training Configuration for Libri5Mix
+# DExFormer — Kaggle Training Configuration for Libri4Mix
 # Target hardware: single-GPU Kaggle T4 / P100 (16 GB VRAM).
 #
 # Key differences from the Libri3Mix config:
-#   • num_spks: 5   — extract 5 sources per mixture
+#   • num_spks: 4   — extract 4 sources per mixture
 #   • norm_type: "batchnorm" — paper-exact; safe at batch_size=1 (see note below)
-#   • gradient_accumulation_steps: 16 — compensates for effective batch
-#     shrinkage caused by 5 extraction passes instead of 3 (more VRAM per step)
-#   • lr_warmup_steps: 8000 — longer warmup for a harder task
-#   • max_epochs: 300 — 5-speaker separation converges more slowly
+#   • gradient_accumulation_steps: 12 — compensates for effective batch
+#     shrinkage caused by 4 extraction passes instead of 3 (more VRAM per step)
+#   • lr_warmup_steps: 6000 — longer warmup for a harder task
+#   • max_epochs: 250 — 4-speaker separation converges more slowly
 # =============================================================================
 
 # Seed needs to be set at top of yaml, before objects with parameters are made
 seed: 1234
 __set_seed: !apply:torch.manual_seed [!ref <seed>]
-output_folder: !ref results/kaggle_libri5mix/<seed>
+output_folder: !ref results/kaggle_libri4mix/<seed>
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Data paths  (override these via CLI when running on Kaggle)
-# Example override: output_folder=/kaggle/working/results data_folder=/kaggle/input/libri5mix/wav16k/max
+# Example override: output_folder=/kaggle/working/results data_folder=/kaggle/input/libri4mix/wav16k/max
 # ──────────────────────────────────────────────────────────────────────────────
-data_folder: data/libri5mix/wav16k/max
-train_data: data/libri5mix_train.csv
-valid_data: data/libri5mix_valid.csv
-test_data:  data/libri5mix_test.csv
+data_folder: data/libri4mix/wav16k/max
+train_data: data/libri4mix_train.csv
+valid_data: data/libri4mix_valid.csv
+test_data:  data/libri4mix_test.csv
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Experiment parameters
 # ──────────────────────────────────────────────────────────────────────────────
-num_spks: 5              # Libri5Mix: 5 speakers per mixture
+num_spks: 4              # Libri4Mix: 4 speakers per mixture
 
-batch_size: 1            # Forced by VRAM — 5 extraction passes per forward step
+batch_size: 1            # Forced by VRAM — 4 extraction passes per forward step
                          # exhausts 16 GB at batch_size > 1 with float32.
 
 # ─── GRADIENT ACCUMULATION ───────────────────────────────────────────────────
-# With 5 speakers the forward pass is ~67 % longer than 3-speaker training.
-# We accumulate 16 micro-batches → effective batch = 16 for optimizer stability.
+# With 4 speakers the forward pass is ~33 % longer than 3-speaker training.
+# We accumulate 12 micro-batches → effective batch = 12 for optimizer stability.
 # Reduce to 8 if you have a V100/A100 with more VRAM.
-gradient_accumulation_steps: 16
+gradient_accumulation_steps: 12
 
-max_epochs: 300          # 5-speaker separation needs more epochs than 3-speaker
-learning_rate: 1.0e-4    # Conservative LR; 5-speaker OR-PIT gradients are noisier
-lr_warmup_steps: 8000    # Longer warmup to avoid early instability
+max_epochs: 250          # 4-speaker separation needs more epochs than 3-speaker
+learning_rate: 1.0e-4    # Conservative LR; 4-speaker OR-PIT gradients are noisier
+lr_warmup_steps: 6000    # Longer warmup to avoid early instability
 clip_grad_norm: 5.0
 mixed_precision: true    # AMP is mandatory at batch_size=1 for this model size
 max_audio_length: 4.0    # seconds; Libri5Mix clips are typically 4 s
