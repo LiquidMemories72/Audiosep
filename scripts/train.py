@@ -1,5 +1,10 @@
 import os
 import sys
+
+# Ensure the repo root is on sys.path so `dexformer` is importable when
+# torchrun spawns worker processes from any working directory.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import torch
 import torch.optim  # noqa: required before speechbrain to avoid k2 lazy-import crash
 
