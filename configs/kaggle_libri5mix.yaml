@@ -43,7 +43,9 @@ max_epochs: 250          # 4-speaker separation needs more epochs than 3-speaker
 learning_rate: 1.0e-4    # Conservative LR; 4-speaker OR-PIT gradients are noisier
 lr_warmup_steps: 6000    # Longer warmup to avoid early instability
 clip_grad_norm: 5.0
-mixed_precision: true    # AMP is mandatory at batch_size=1 for this model size
+# NOTE: mixed_precision is NOT a SpeechBrain hparam — it was silently ignored.
+# To enable AMP, pass --precision fp16 on the CLI (or add it to the torchrun command).
+# GradScaler only activates when precision=="fp16" and device=="cuda".
 max_audio_length: 4.0    # seconds; Libri5Mix clips are typically 4 s
 
 # ──────────────────────────────────────────────────────────────────────────────

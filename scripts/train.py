@@ -105,31 +105,8 @@ class DExFormerSeparation(sb.Brain):
             logger.info("Empty loss! Skipping this batch")
             loss.data = torch.tensor(0.0).to(self.device)
 
-        # Overfit audio saving every epoch (since we have 10 batches per epoch, we save every 10 steps)
-        if self.step % 10 == 0:
-            import torchaudio
-            import os
-            save_dir = os.path.join(self.hparams.output_folder, "overfit_audio")
-            os.makedirs(save_dir, exist_ok=True)
-            
-            step_str = f"step_{self.step:04d}"
-            
-            # Save mixture and GT (only for the first element in batch)
-            torchaudio.save(os.path.join(save_dir, f"{step_str}_mix.wav"), mixture[0].squeeze().unsqueeze(0).cpu(), 16000)
-            for i, t in enumerate(targets):
-                torchaudio.save(os.path.join(save_dir, f"{step_str}_gt_spk{i+1}.wav"), t[0][0].squeeze().unsqueeze(0).cpu(), 16000)
-            
-            # Save estimations
-            # predictions is exactly est_sources (the list of speaker tensors)
-            est_sources = predictions
-            
-            for i, s in enumerate(est_sources):
-                torchaudio.save(os.path.join(save_dir, f"{step_str}_est_spk{i+1}.wav"), s[0].detach().squeeze().unsqueeze(0).cpu(), 16000)
-                
-            # Note: saving residuals is tricky because they are computed inside extract_all and not returned.
-            # For this quick experiment, we will just save the final sources.
-            
-            # Log metrics
+        # Log metrics every 10 steps (rank 0 only to avoid duplicate lines under DDP)
+        if self.step % 10 == 0 and sb.utils.distributed.if_main_process():
             mem_mb = torch.cuda.max_memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
             norm_val = total_norm.item() if 'total_norm' in locals() else 0.0
             logger.info(f"[Step {self.step}] Loss: {loss.item():.4f} | Grad Norm: {norm_val:.4f} | Peak Mem: {mem_mb:.1f} MB")
