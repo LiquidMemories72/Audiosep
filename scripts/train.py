@@ -68,35 +68,39 @@ class DExFormerSeparation(sb.Brain):
         """Trains one batch"""
         # Unpacking batch list
         mixture = batch.mix_sig
-        
+
         # Determine number of speakers
         num_spks = self.hparams.num_spks
-        
+
         targets = [getattr(batch, f"s{i}_sig") for i in range(1, num_spks + 1)]
-            
-        noise = None # Not using WHAM noise in this script for simplicity
+
+        noise = None  # Not using WHAM noise in this script for simplicity
 
         with self.training_ctx:
             predictions, targets_unpacked, mix_unpacked = self.compute_forward(
                 mixture, targets, sb.Stage.TRAIN, noise
             )
-            loss = self.compute_objectives((predictions, targets_unpacked, mix_unpacked), targets, sb.Stage.TRAIN)
+            loss = self.compute_objectives(
+                (predictions, targets_unpacked, mix_unpacked), targets, sb.Stage.TRAIN
+            )
 
         if loss.nelement() > 0:
-            self.scaler.scale(loss).backward()
-            
-            # Gradient Accumulation
-            # SpeechBrain's check_gradients() handles accumulation properly if step%grad_accum == 0
+            # Divide by accumulation steps so gradients are averaged (not summed)
+            # across the window. Without this, the effective LR = lr × grad_accum_steps.
+            scaled_loss = loss / self.hparams.gradient_accumulation_steps
+            self.scaler.scale(scaled_loss).backward()
+
+            # Gradient Accumulation: only step the optimizer every N micro-batches
             if self.step % self.hparams.gradient_accumulation_steps == 0:
                 if getattr(self.hparams, "clip_grad_norm", -1) > 0:
                     self.scaler.unscale_(self.optimizer)
-                    
-                    # Track unclipped norm for logging
+
+                    # Track pre-clip norm for logging
                     total_norm = torch.nn.utils.clip_grad_norm_(
                         self.modules.parameters(),
                         self.hparams.clip_grad_norm,
                     )
-                    
+
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
                 self.optimizer.zero_grad()
@@ -108,7 +112,7 @@ class DExFormerSeparation(sb.Brain):
         # Log metrics every 10 steps (rank 0 only to avoid duplicate lines under DDP)
         if self.step % 10 == 0 and sb.utils.distributed.if_main_process():
             mem_mb = torch.cuda.max_memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
-            norm_val = total_norm.item() if 'total_norm' in locals() else 0.0
+            norm_val = total_norm.item() if "total_norm" in locals() else 0.0
             logger.info(f"[Step {self.step}] Loss: {loss.item():.4f} | Grad Norm: {norm_val:.4f} | Peak Mem: {mem_mb:.1f} MB")
 
         return loss.detach().cpu()
@@ -139,7 +143,15 @@ class DExFormerSeparation(sb.Brain):
                 )
 
 def dataio_prep(hparams):
-    """Creates data processing pipeline"""
+    """Creates data processing pipeline.
+
+    Training: random crop — a single uniformly-sampled offset is computed from
+    the mixture file and reused for every source, keeping all streams aligned.
+
+    Validation/Test: deterministic head-crop (always from offset 0) for
+    reproducible evaluation metrics.
+    """
+    import random
 
     # 1. Define datasets
     train_data = sb.dataio.dataset.DynamicItemDataset.from_csv(
@@ -157,24 +169,62 @@ def dataio_prep(hparams):
         replacements={"data_root": hparams["data_folder"]},
     )
 
-    datasets = [train_data, valid_data, test_data]
-
-    # Max samples to load (3 sec @ 16kHz). Prevents huge autograd graphs.
+    # Max samples per clip (e.g. 4 s × 16000 Hz = 64 000 samples).
     max_len = int(hparams.get("max_audio_length", 3.0) * hparams.get("sample_rate", 16000))
 
-    # 2. Provide audio pipelines
+    # ──────────────────────────────────────────────────────────────────────────
+    # TRAIN pipelines — random crop with a shared offset
+    #
+    # How the offset is shared across streams:
+    #   1. The mix pipeline produces TWO outputs: mix_sig AND crop_start.
+    #   2. DynamicItemDataset caches all computed items within a single
+    #      __getitem__ call, so crop_start is computed exactly once per sample.
+    #   3. Every source pipeline declares "crop_start" as an input, which forces
+    #      the dataset to resolve it from the cache — always the same value for
+    #      mix and all sN signals in a given sample.
+    #
+    # DDP / multi-worker safety:
+    #   random.randint runs inside __getitem__ in the DataLoader worker process.
+    #   PyTorch seeds each worker differently (base_seed + worker_id), so crops
+    #   vary across samples and epochs while remaining reproducible if you fix
+    #   the global seed.
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @sb.utils.data_pipeline.takes("mix_wav")
+    @sb.utils.data_pipeline.provides("mix_sig", "crop_start")
+    def train_mix_pipeline(mix_wav):
+        sig = sb.dataio.dataio.read_audio(mix_wav)
+        L = len(sig)
+        start = random.randint(0, L - max_len) if L > max_len else 0
+        yield sig[start : start + max_len]
+        yield start  # passed to every source pipeline below
+
+    sb.dataio.dataset.add_dynamic_item([train_data], train_mix_pipeline)
+
+    def make_train_source_pipeline(wav_key, sig_key, max_samples):
+        @sb.utils.data_pipeline.takes(wav_key, "crop_start")
+        @sb.utils.data_pipeline.provides(sig_key)
+        def _pipeline(wav_path, crop_start):
+            sig = sb.dataio.dataio.read_audio(wav_path)
+            return sig[crop_start : crop_start + max_samples]
+        return _pipeline
+
+    for i in range(1, hparams["num_spks"] + 1):
+        pipeline = make_train_source_pipeline(f"s{i}_wav", f"s{i}_sig", max_len)
+        sb.dataio.dataset.add_dynamic_item([train_data], pipeline)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # VALID / TEST pipelines — deterministic head-crop from offset 0
+    # ──────────────────────────────────────────────────────────────────────────
+
     @sb.utils.data_pipeline.takes("mix_wav")
     @sb.utils.data_pipeline.provides("mix_sig")
-    def audio_pipeline_mix(mix_wav):
-        mix_sig = sb.dataio.dataio.read_audio(mix_wav)
-        return mix_sig[:max_len]
+    def eval_mix_pipeline(mix_wav):
+        return sb.dataio.dataio.read_audio(mix_wav)[:max_len]
 
-    sb.dataio.dataset.add_dynamic_item(datasets, audio_pipeline_mix)
+    sb.dataio.dataset.add_dynamic_item([valid_data, test_data], eval_mix_pipeline)
 
-    # Dynamically register one audio pipeline per speaker (s1_wav -> s1_sig, ..., sN_wav -> sN_sig).
-    # A factory function is used to capture `wav_key` / `sig_key` by value, avoiding the classic
-    # loop-closure pitfall where all lambdas would capture the same (final) loop variable.
-    def make_audio_pipeline(wav_key, sig_key, max_samples):
+    def make_eval_source_pipeline(wav_key, sig_key, max_samples):
         @sb.utils.data_pipeline.takes(wav_key)
         @sb.utils.data_pipeline.provides(sig_key)
         def _pipeline(wav_path):
@@ -182,11 +232,12 @@ def dataio_prep(hparams):
         return _pipeline
 
     for i in range(1, hparams["num_spks"] + 1):
-        pipeline = make_audio_pipeline(f"s{i}_wav", f"s{i}_sig", max_len)
-        sb.dataio.dataset.add_dynamic_item(datasets, pipeline)
+        pipeline = make_eval_source_pipeline(f"s{i}_wav", f"s{i}_sig", max_len)
+        sb.dataio.dataset.add_dynamic_item([valid_data, test_data], pipeline)
 
+    # crop_start is an internal computed node — exclude it from batch output keys
     output_keys = ["id", "mix_sig"] + [f"s{i}_sig" for i in range(1, hparams["num_spks"] + 1)]
-    sb.dataio.dataset.set_output_keys(datasets, output_keys)
+    sb.dataio.dataset.set_output_keys([train_data, valid_data, test_data], output_keys)
 
     return train_data, valid_data, test_data
 
