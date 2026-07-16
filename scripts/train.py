@@ -143,15 +143,7 @@ class DExFormerSeparation(sb.Brain):
                 )
 
 def dataio_prep(hparams):
-    """Creates data processing pipeline.
-
-    Training: random crop — a single uniformly-sampled offset is computed from
-    the mixture file and reused for every source, keeping all streams aligned.
-
-    Validation/Test: deterministic head-crop (always from offset 0) for
-    reproducible evaluation metrics.
-    """
-    import random
+    """Creates data processing pipeline"""
 
     # 1. Define datasets
     train_data = sb.dataio.dataset.DynamicItemDataset.from_csv(
@@ -169,62 +161,22 @@ def dataio_prep(hparams):
         replacements={"data_root": hparams["data_folder"]},
     )
 
-    # Max samples per clip (e.g. 4 s × 16000 Hz = 64 000 samples).
+    datasets = [train_data, valid_data, test_data]
+
+    # Max samples to load. Prevents huge autograd graphs.
     max_len = int(hparams.get("max_audio_length", 3.0) * hparams.get("sample_rate", 16000))
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # TRAIN pipelines — random crop with a shared offset
-    #
-    # How the offset is shared across streams:
-    #   1. The mix pipeline produces TWO outputs: mix_sig AND crop_start.
-    #   2. DynamicItemDataset caches all computed items within a single
-    #      __getitem__ call, so crop_start is computed exactly once per sample.
-    #   3. Every source pipeline declares "crop_start" as an input, which forces
-    #      the dataset to resolve it from the cache — always the same value for
-    #      mix and all sN signals in a given sample.
-    #
-    # DDP / multi-worker safety:
-    #   random.randint runs inside __getitem__ in the DataLoader worker process.
-    #   PyTorch seeds each worker differently (base_seed + worker_id), so crops
-    #   vary across samples and epochs while remaining reproducible if you fix
-    #   the global seed.
-    # ──────────────────────────────────────────────────────────────────────────
-
-    @sb.utils.data_pipeline.takes("mix_wav")
-    @sb.utils.data_pipeline.provides("mix_sig", "crop_start")
-    def train_mix_pipeline(mix_wav):
-        sig = sb.dataio.dataio.read_audio(mix_wav)
-        L = len(sig)
-        start = random.randint(0, L - max_len) if L > max_len else 0
-        yield sig[start : start + max_len]
-        yield start  # passed to every source pipeline below
-
-    sb.dataio.dataset.add_dynamic_item([train_data], train_mix_pipeline)
-
-    def make_train_source_pipeline(wav_key, sig_key, max_samples):
-        @sb.utils.data_pipeline.takes(wav_key, "crop_start")
-        @sb.utils.data_pipeline.provides(sig_key)
-        def _pipeline(wav_path, crop_start):
-            sig = sb.dataio.dataio.read_audio(wav_path)
-            return sig[crop_start : crop_start + max_samples]
-        return _pipeline
-
-    for i in range(1, hparams["num_spks"] + 1):
-        pipeline = make_train_source_pipeline(f"s{i}_wav", f"s{i}_sig", max_len)
-        sb.dataio.dataset.add_dynamic_item([train_data], pipeline)
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # VALID / TEST pipelines — deterministic head-crop from offset 0
-    # ──────────────────────────────────────────────────────────────────────────
-
+    # 2. Provide audio pipelines
     @sb.utils.data_pipeline.takes("mix_wav")
     @sb.utils.data_pipeline.provides("mix_sig")
-    def eval_mix_pipeline(mix_wav):
+    def audio_pipeline_mix(mix_wav):
         return sb.dataio.dataio.read_audio(mix_wav)[:max_len]
 
-    sb.dataio.dataset.add_dynamic_item([valid_data, test_data], eval_mix_pipeline)
+    sb.dataio.dataset.add_dynamic_item(datasets, audio_pipeline_mix)
 
-    def make_eval_source_pipeline(wav_key, sig_key, max_samples):
+    # A factory function is used to capture `wav_key` / `sig_key` by value, avoiding the classic
+    # loop-closure pitfall where all lambdas would capture the same (final) loop variable.
+    def make_audio_pipeline(wav_key, sig_key, max_samples):
         @sb.utils.data_pipeline.takes(wav_key)
         @sb.utils.data_pipeline.provides(sig_key)
         def _pipeline(wav_path):
@@ -232,12 +184,11 @@ def dataio_prep(hparams):
         return _pipeline
 
     for i in range(1, hparams["num_spks"] + 1):
-        pipeline = make_eval_source_pipeline(f"s{i}_wav", f"s{i}_sig", max_len)
-        sb.dataio.dataset.add_dynamic_item([valid_data, test_data], pipeline)
+        pipeline = make_audio_pipeline(f"s{i}_wav", f"s{i}_sig", max_len)
+        sb.dataio.dataset.add_dynamic_item(datasets, pipeline)
 
-    # crop_start is an internal computed node — exclude it from batch output keys
     output_keys = ["id", "mix_sig"] + [f"s{i}_sig" for i in range(1, hparams["num_spks"] + 1)]
-    sb.dataio.dataset.set_output_keys([train_data, valid_data, test_data], output_keys)
+    sb.dataio.dataset.set_output_keys(datasets, output_keys)
 
     return train_data, valid_data, test_data
 
