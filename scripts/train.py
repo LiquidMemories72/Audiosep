@@ -219,11 +219,19 @@ if __name__ == "__main__":
     with open(hparams_file, encoding="utf-8") as fin:
         hparams = load_hyperpyyaml(fin, overrides)
 
-    # Auto-detect torchrun (DDP) to trigger SpeechBrain's native distributed_launch
-    if "LOCAL_RANK" in os.environ:
-        run_opts["distributed_launch"] = True
-        if "distributed_backend" not in run_opts:
-            run_opts["distributed_backend"] = "nccl"
+    # Auto-detect torchrun: LOCAL_RANK is set by torchrun in the environment.
+    # RunOptions is a frozen dataclass — we cannot mutate it in-place.
+    # Use dataclasses.replace() to create a patched copy with distributed_launch=True.
+    # ddp_init_group() already reads LOCAL_RANK/RANK directly from os.environ,
+    # so it doesn't need run_opts to carry those values — but Brain._wrap_distributed()
+    # gates on run_opts.distributed_launch, so we MUST set it here.
+    if "LOCAL_RANK" in os.environ and not run_opts.distributed_launch:
+        import dataclasses
+        run_opts = dataclasses.replace(
+            run_opts,
+            distributed_launch=True,
+            distributed_backend="nccl",
+        )
 
     # Alias DExFormer.forward to extract_all so PyTorch DDP can synchronize gradients correctly
     if not hasattr(DExFormer, "forward") or DExFormer.forward == torch.nn.Module.forward:
