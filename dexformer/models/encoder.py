@@ -1,6 +1,5 @@
 import torch.nn as nn
 from speechbrain.lobes.models.dual_path import Encoder as SBEncoder
-
 class Encoder(nn.Module):
     """
     Thin wrapper around SpeechBrain's Encoder.
@@ -14,6 +13,5 @@ class Encoder(nn.Module):
             out_channels=out_channels,
             in_channels=in_channels
         )
-
     def forward(self, x):
         return self.encoder(x)

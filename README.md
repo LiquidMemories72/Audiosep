@@ -1,6 +1,6 @@
-# DExFormer — Deflationary Extraction Transformer
+# Recursive Speech Separation
 
-An implementation of **DExFormer** (Deflationary Extraction Transformer) for multi-speaker speech separation, based on Lee, Kim & Jang, *Sensors* 2025.
+A specific recursive-based implementation for multi-speaker speech separation.
 
 ---
 
@@ -10,7 +10,7 @@ An implementation of **DExFormer** (Deflationary Extraction Transformer) for mul
 |:----------|:-----------------------|
 | **Encoder** | SpeechBrain `dual_path.Encoder` (Conv1d + ReLU) |
 | **Decoder** | SpeechBrain `dual_path.Decoder` (ConvTranspose1d) |
-| **MaskNet** | Custom `DExFormerMaskNet` — $N=3$ macro-iterations of (IntraConvT, InterConvT), each with $K=8$ inner repeats |
+| **MaskNet** | Custom Recursive MaskNet — $N=3$ macro-iterations of (IntraConvT, InterConvT), each with $K=8$ inner repeats |
 | **Intra/Inter Blocks** | Custom `ConvTBlock` — Multi-Head Attention (MHA) + MobileNetV2 Bottleneck + Squeeze-and-Excitation (SE) |
 | **Deflationary Loop** | Waveform-domain subtraction ($y_{new} = y_{res} - \hat{s}$), re-encoded iteratively |
 | **STC** | Sequence Termination Criterion (parameter-free power thresholding, inference only) |
@@ -18,7 +18,7 @@ An implementation of **DExFormer** (Deflationary Extraction Transformer) for mul
 
 ### Scaling to 3+ Speakers
 
-Because DExFormer separates speech iteratively through a **deflationary extraction process**, it scales to 3 or more speakers natively:
+Because this model separates speech iteratively through a **recursive extraction process**, it scales to 3 or more speakers natively:
 1. The core extraction block (`extract_one`) is speaker-agnostic and uses shared weights.
 2. In each iteration, the model extracts one target source and subtracts it from the current residual signal in the waveform domain.
 3. To extract $C$ speakers, we simply run this loop $C$ times (e.g. 3 times for Libri3Mix). Since the same extraction module is reused, the model parameters do not grow with the number of speakers.
