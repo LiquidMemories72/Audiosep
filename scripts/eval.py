@@ -29,6 +29,11 @@ class DExFormerEvaluator(DExFormerSeparation):
             est_sources, target_tensors, mix = self.compute_forward(mixture, targets, stage)
             loss = self.compute_objectives((est_sources, target_tensors, mix), targets, stage)
         return loss.mean().detach()
+
+    def on_stage_end(self, stage, stage_loss, epoch=None):
+        if stage == sb.Stage.TEST:
+            snr_db = -stage_loss
+            logger.info(f"Test Evaluation Complete! OR-PIT Loss: {stage_loss:.4f} | Estimated Output SNR: {snr_db:.2f} dB")
 if __name__ == "__main__":
     hparams_file, run_opts, overrides = sb.parse_arguments(sys.argv[1:])
     with open(hparams_file, encoding="utf-8") as fin:
