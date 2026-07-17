@@ -1,0 +1,119 @@
+# =============================================================================
+# DExFormer — Kaggle Training Configuration for Libri4Mix
+# Target hardware: single-GPU Kaggle T4 / P100 (16 GB VRAM).
+#
+# Key differences from the Libri3Mix config:
+#   • num_spks: 4   — extract 4 sources per mixture
+#   • norm_type: "batchnorm" — paper-exact; safe at batch_size=1 (see note below)
+#   • gradient_accumulation_steps: 12 — compensates for effective batch
+#     shrinkage caused by 4 extraction passes instead of 3 (more VRAM per step)
+#   • lr_warmup_steps: 6000 — longer warmup for a harder task
+#   • max_epochs: 250 — 4-speaker separation converges more slowly
+# =============================================================================
+
+# Seed needs to be set at top of yaml, before objects with parameters are made
+seed: 1234
+__set_seed: !apply:torch.manual_seed [!ref <seed>]
+output_folder: !ref results/kaggle_libri4mix/<seed>
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Data paths  (override these via CLI when running on Kaggle)
+# Example override: output_folder=/kaggle/working/results data_folder=/kaggle/input/libri4mix/wav16k/max
+# ──────────────────────────────────────────────────────────────────────────────
+data_folder: data/libri4mix/wav16k/max
+train_data: data/libri4mix_train.csv
+valid_data: data/libri4mix_valid.csv
+test_data:  data/libri4mix_test.csv
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Experiment parameters
+# ──────────────────────────────────────────────────────────────────────────────
+num_spks: 4              # Libri4Mix: 4 speakers per mixture
+
+batch_size: 1            # Forced by VRAM — 4 extraction passes per forward step
+                         # exhausts 16 GB at batch_size > 1 with float32.
+
+# ─── GRADIENT ACCUMULATION ───────────────────────────────────────────────────
+# With 4 speakers the forward pass is ~33 % longer than 3-speaker training.
+# We accumulate 12 micro-batches → effective batch = 12 for optimizer stability.
+# Reduce to 8 if you have a V100/A100 with more VRAM.
+gradient_accumulation_steps: 12
+
+max_epochs: 250          # 4-speaker separation needs more epochs than 3-speaker
+learning_rate: 1.0e-4    # Conservative LR; 4-speaker OR-PIT gradients are noisier
+lr_warmup_steps: 6000    # Longer warmup to avoid early instability
+clip_grad_norm: 5.0
+# NOTE: mixed_precision is NOT a SpeechBrain hparam — it was silently ignored.
+# To enable AMP, pass --precision fp16 on the CLI (or add it to the torchrun command).
+# GradScaler only activates when precision=="fp16" and device=="cuda".
+max_audio_length: 4.0    # seconds; Libri5Mix clips are typically 4 s
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Data loader
+# ──────────────────────────────────────────────────────────────────────────────
+dataloader_opts:
+    batch_size: !ref <batch_size>
+    num_workers: 2       # Kaggle VMs have 2 CPU cores; 0 on Windows
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Network parameters
+# ──────────────────────────────────────────────────────────────────────────────
+N_filters: 256
+kernel_size: 16
+N_macro_iterations: 3
+K_inner_repeats: 8
+nhead: 8
+expansion_factor: 2
+dropout: 0.1
+chunk_size: 100
+
+# ─── NORMALIZATION NOTE ───────────────────────────────────────────────────────
+# BatchNorm1d is the paper-exact setting and is SAFE at batch_size=1 for this
+# architecture. Dual-Path processing slices each waveform into S overlapping
+# chunks before entering the transformer blocks. The BN layers therefore see a
+# tensor of shape [B*S, C, L_chunk] — an effective batch of B*S ≈ 80+ samples
+# for a 4-second signal (S = ceil(T_enc / chunk_size)). This is well above the
+# minimum batch size needed for stable BN statistics.
+#
+# Use "groupnorm" only if you explicitly want per-sample normalisation
+# (e.g. for extremely short clips where S < 8).
+norm_type: "batchnorm"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Modules
+# ──────────────────────────────────────────────────────────────────────────────
+dexformer: !new:dexformer.models.dexformer.DExFormer
+    N_filters: !ref <N_filters>
+    kernel_size: !ref <kernel_size>
+    N_macro_iterations: !ref <N_macro_iterations>
+    K_inner_repeats: !ref <K_inner_repeats>
+    nhead: !ref <nhead>
+    expansion_factor: !ref <expansion_factor>
+    dropout: !ref <dropout>
+    chunk_size: !ref <chunk_size>
+    norm_type: !ref <norm_type>
+
+modules:
+    dexformer: !ref <dexformer>
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Optimizer
+# ──────────────────────────────────────────────────────────────────────────────
+optimizer: !name:torch.optim.Adam
+    lr: !ref <learning_rate>
+
+epoch_counter: !new:speechbrain.utils.epoch_loop.EpochCounter
+    limit: !ref <max_epochs>
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Checkpointer
+# Saves model weights, optimizer state, and epoch counter every validation step.
+# On resuming, SpeechBrain automatically calls recover_if_possible() to restart
+# from the latest checkpoint — no manual intervention needed.
+# ──────────────────────────────────────────────────────────────────────────────
+checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
+    checkpoints_dir: !ref <output_folder>/save
+    recoverables:
+        model: !ref <dexformer>
+        optimizer: !ref <optimizer>
+        counter: !ref <epoch_counter>
