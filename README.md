@@ -32,6 +32,7 @@ A tiny verification experiment was conducted by overfitting the network on 10 re
 
 * **Initial Loss:** 26.6 dB (OR-PIT SNR)
 * **Final Loss (Epoch 50):** 20.8 dB (best checkpoint: 20.4 dB)
+* **6 Epochs Performance:** SNR 17.2 dB (Training) / 17.9 dB (Validation)
 * **Gradient Norms:** Highly stable, staying strictly between **10 and 80** after adjusting the learning rate.
 * **Peak GPU Memory:** 6593.1 MB (comfortably fits on a 6GB VRAM card).
 * **Training Speed:** ~18.7 seconds per iteration (batch size of 1).
