@@ -24,9 +24,7 @@ class DExFormerEvaluator(DExFormerSeparation):
         We compute SI-SDR and SDR metrics here.
         """
         mixture = batch.mix_sig
-        targets = [batch.s1_sig, batch.s2_sig]
-        if self.hparams.num_spks == 3:
-            targets.append(batch.s3_sig)
+        targets = [getattr(batch, f"s{i}_sig") for i in range(1, self.hparams.num_spks + 1)]
         with torch.no_grad():
             est_sources, target_tensors, mix = self.compute_forward(mixture, targets, stage)
             loss = self.compute_objectives((est_sources, target_tensors, mix), targets, stage)
