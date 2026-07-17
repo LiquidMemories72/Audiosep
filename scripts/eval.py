@@ -18,6 +18,10 @@ from dexformer.models.dexformer import DExFormer
 from train import DExFormerSeparation, dataio_prep
 logger = get_logger(__name__)
 class DExFormerEvaluator(DExFormerSeparation):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.test_snrs = []
+
     def evaluate_batch(self, batch, stage):
         """
         Computations needed for validation/test batches during evaluation.
@@ -28,12 +32,23 @@ class DExFormerEvaluator(DExFormerSeparation):
         with torch.no_grad():
             est_sources, target_tensors, mix = self.compute_forward(mixture, targets, stage)
             loss = self.compute_objectives((est_sources, target_tensors, mix), targets, stage)
+            
+            if stage == sb.Stage.TEST:
+                from speechbrain.nnet.losses import get_snr_loss, PitWrapper
+                pit_snr = PitWrapper(get_snr_loss)
+                preds = torch.stack(est_sources, dim=-1)
+                trgts = torch.stack(target_tensors, dim=-1)
+                pure_snr_loss = pit_snr(preds, trgts)
+                self.test_snrs.append(-pure_snr_loss.mean().item())
+                
         return loss.mean().detach()
 
     def on_stage_end(self, stage, stage_loss, epoch=None):
         if stage == sb.Stage.TEST:
             snr_db = -stage_loss
-            logger.info(f"Test Evaluation Complete! OR-PIT Loss: {stage_loss:.4f} | Estimated Output SNR: {snr_db:.2f} dB")
+            pure_snr_db = sum(self.test_snrs) / len(self.test_snrs) if self.test_snrs else 0.0
+            logger.info(f"Test Evaluation Complete! OR-PIT Loss: {stage_loss:.4f} | Estimated Output SNR: {snr_db:.2f} dB | Pure PIT-SNR: {pure_snr_db:.2f} dB")
+            self.test_snrs = []
 if __name__ == "__main__":
     hparams_file, run_opts, overrides = sb.parse_arguments(sys.argv[1:])
     with open(hparams_file, encoding="utf-8") as fin:
