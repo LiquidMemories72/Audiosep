@@ -33,6 +33,8 @@ if __name__ == "__main__":
     hparams_file, run_opts, overrides = sb.parse_arguments(sys.argv[1:])
     with open(hparams_file, encoding="utf-8") as fin:
         hparams = load_hyperpyyaml(fin, overrides)
+    if not hasattr(DExFormer, "forward") or DExFormer.forward == torch.nn.Module.forward:
+        DExFormer.forward = DExFormer.extract_all
     train_data, valid_data, test_data = dataio_prep(hparams)
     evaluator = DExFormerEvaluator(
         modules=hparams["modules"],
