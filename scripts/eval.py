@@ -61,6 +61,11 @@ if __name__ == "__main__":
     if not hasattr(DExFormer, "forward") or DExFormer.forward == torch.nn.Module.forward:
         DExFormer.forward = DExFormer.extract_all
     train_data, valid_data, test_data = dataio_prep(hparams)
+    if "checkpointer" in hparams:
+        checkpointer = hparams["checkpointer"]
+        if "optimizer" in checkpointer.recoverables:
+            del checkpointer.recoverables["optimizer"]
+
     evaluator = DExFormerEvaluator(
         modules=hparams["modules"],
         opt_class=hparams["optimizer"],
