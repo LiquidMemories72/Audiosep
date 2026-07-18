@@ -59,7 +59,7 @@ class DExFormerEvaluator(DExFormerSeparation):
         if stage == sb.Stage.TEST:
             snr_db = -stage_loss
             sisnri_db = sum(self.test_sisnri) / len(self.test_sisnri) if self.test_sisnri else 0.0
-            logger.info(f"Test Evaluation Complete! OR-PIT Loss: {stage_loss:.4f} | Estimated Output SNR: {snr_db:.2f} dB | SI-SNRi: {sisnri_db:.2f} dB")
+            print(f"Test Evaluation Complete! OR-PIT Loss: {stage_loss:.4f} | Estimated Output SNR: {snr_db:.2f} dB | SI-SNRi: {sisnri_db:.2f} dB")
             self.test_sisnri = []
 if __name__ == "__main__":
     hparams_file, run_opts, overrides = sb.parse_arguments(sys.argv[1:])
@@ -80,5 +80,5 @@ if __name__ == "__main__":
         run_opts=run_opts,
         checkpointer=hparams.get("checkpointer"),
     )
-    logger.info("Starting evaluation on the test set...")
+    print("Starting evaluation on the test set...")
     evaluator.evaluate(test_data, min_key="OR-PIT_loss")
