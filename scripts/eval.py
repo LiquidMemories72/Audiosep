@@ -22,6 +22,28 @@ class DExFormerEvaluator(DExFormerSeparation):
         super().__init__(*args, **kwargs)
         self.test_sisnri = []
 
+    def compute_forward(self, mix, targets, stage, noise=None):
+        """
+        Override compute_forward to force exactly num_spks extractions.
+        """
+        mix, mix_lens = mix
+        mix = mix.to(self.device)
+        num_spks = self.hparams.num_spks
+        target_tensors = []
+        for i in range(num_spks):
+            t = targets[i][0].to(self.device)
+            target_tensors.append(t)
+            
+        # Passing training=True forces it to extract exactly num_spks times
+        # without using the Sequence Termination Criterion (STC) early stopping.
+        # It does NOT affect nn.Module.eval() mode (dropout, batchnorm, etc. remain in eval mode).
+        est_sources = self.modules.dexformer(
+            mix, 
+            num_speakers=num_spks, 
+            training=True
+        )
+        return est_sources, target_tensors, mix
+
     def evaluate_batch(self, batch, stage):
         """
         Computations needed for validation/test batches during evaluation.
@@ -80,5 +102,13 @@ if __name__ == "__main__":
         run_opts=run_opts,
         checkpointer=hparams.get("checkpointer"),
     )
+    
+    if "checkpointer" in hparams:
+        ckpt = hparams["checkpointer"].find_checkpoint(min_key="OR-PIT_loss")
+        if ckpt is not None:
+            print(f"✅ Loaded checkpoint from: {ckpt.path}")
+        else:
+            print("❌ WARNING: No checkpoint found! Evaluating an UNTRAINED, randomly initialized model.")
+            
     print("Starting evaluation on the test set...")
     evaluator.evaluate(test_data, min_key="OR-PIT_loss")
