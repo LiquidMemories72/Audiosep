@@ -89,6 +89,10 @@ if __name__ == "__main__":
         hparams = load_hyperpyyaml(fin, overrides)
     if not hasattr(DExFormer, "forward") or DExFormer.forward == torch.nn.Module.forward:
         DExFormer.forward = DExFormer.extract_all
+        
+    # Override max_audio_length to evaluate only on the first 3 seconds
+    hparams["max_audio_length"] = 3.0
+    
     train_data, valid_data, test_data = dataio_prep(hparams)
     if "checkpointer" in hparams:
         checkpointer = hparams["checkpointer"]
