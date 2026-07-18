@@ -31,11 +31,17 @@ class DExFormerEvaluator(DExFormerSeparation):
         targets = [getattr(batch, f"s{i}_sig") for i in range(1, self.hparams.num_spks + 1)]
         with torch.no_grad():
             est_sources, target_tensors, mix = self.compute_forward(mixture, targets, stage)
-            loss = self.compute_objectives((est_sources, target_tensors, mix), targets, stage)
+            
+            # Ensure est_sources has exactly num_spks elements to match targets
+            est_sources_eval = est_sources[:self.hparams.num_spks]
+            while len(est_sources_eval) < self.hparams.num_spks:
+                est_sources_eval.append(torch.zeros_like(mix))
+                
+            loss = self.compute_objectives((est_sources_eval, target_tensors, mix), targets, stage)
             
             if stage == sb.Stage.TEST:
                 from speechbrain.nnet.losses import get_si_snr_with_pitwrapper
-                preds = torch.stack(est_sources, dim=-1)
+                preds = torch.stack(est_sources_eval, dim=-1)
                 trgts = torch.stack(target_tensors, dim=-1)
                 
                 # The function signature is get_si_snr_with_pitwrapper(source, estimate_source)
