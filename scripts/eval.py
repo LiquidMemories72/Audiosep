@@ -34,14 +34,15 @@ class DExFormerEvaluator(DExFormerSeparation):
             loss = self.compute_objectives((est_sources, target_tensors, mix), targets, stage)
             
             if stage == sb.Stage.TEST:
-                from speechbrain.nnet.losses import get_snr_loss, PitWrapper
-                pit_snr = PitWrapper(get_snr_loss)
+                from speechbrain.nnet.losses import get_si_snr_with_pitwrapper
                 preds = torch.stack(est_sources, dim=-1)
                 trgts = torch.stack(target_tensors, dim=-1)
-                pure_snr_loss = pit_snr(preds, trgts)
+                
+                # The function signature is get_si_snr_with_pitwrapper(source, estimate_source)
+                pure_snr_loss = get_si_snr_with_pitwrapper(trgts, preds)
                 
                 mix_expanded = mix.unsqueeze(-1).expand_as(trgts)
-                base_snr_loss = pit_snr(mix_expanded, trgts)
+                base_snr_loss = get_si_snr_with_pitwrapper(trgts, mix_expanded)
                 
                 sisnri = base_snr_loss - pure_snr_loss
                 self.test_sisnri.extend(sisnri.tolist())
